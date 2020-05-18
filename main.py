@@ -4,6 +4,12 @@ from enum import Enum, auto
 import time
 import warnings
 import copy
+import math
+
+
+def positive_int_check(constant, name):
+    if not isinstance(constant, int) or constant < 1:
+        raise TypeError(f"{name} must be a positive number instead of {constant}.")
 
 
 class GlobalSetup:
@@ -27,8 +33,9 @@ class GlobalSetup:
         time, where RECOVERY_TIME is expected value and RECOVERY_STANDARD_DEVIATION is sigma. If recovery time is drawn
         to be negative, the particle behaves as it would be 0.
 
-        The last stage of simulation is printing the plot of healthy, infected and recovered particles over time,
-        as well as some settings and stats of performed simulation.
+        The last stage of simulation is printing the plot of healthy, infected and recovered particles over time
+        and analysing gathered data using differential equations from SIR model, next printing them in stats in
+        section below the plot.
 
         More on https://github.com/AlexanderGolys/pandemic-simulator/.
 
@@ -48,11 +55,6 @@ class GlobalSetup:
                               If False, each particle's recovery time is constant and equal RECOVERY_TIME.
         RECOVERY_STANDARD_DEVIATION: Parameter of recovery time distribution in case of RANDOM_RECOVERY_TIME being True.
     """
-
-    @staticmethod
-    def positive_int_check(constant, name):
-        if not isinstance(constant, int) or constant < 1:
-            raise TypeError(f"{name} must be a positive number instead of {constant}.")
 
     BALL_RADIUS = 15
     positive_int_check(BALL_RADIUS, "Radius")
@@ -177,9 +179,11 @@ class Colors:
     Colors used in this project.
     get_color is a dictionary matching color to corresponding particle state.
     """
-    GREEN = (0, 0xFF, 0)
-    RED = (0xFF, 0, 0)
-    YELLOW = (0xFF, 0x6F, 0)
+    GREEN = (0x22, 0xEE, 0x22)
+    RED = (0xEE, 0x22, 0x22)
+    # YELLOW = (0xFF, 0x7F, 0)
+    YELLOW = (0xAA, 0xAA, 0xAA)
+
     BG_COLOR = (0xEE, 0xEE, 0xEE)
     WHITE = (0xFF, 0xFF, 0xFF)
     BLACK = (0, 0, 0)
@@ -300,7 +304,8 @@ class PopulationMethods:
     @staticmethod
     def constructor():
         if GlobalSetup.NO_BALLS > 70:
-            warnings.warn("Number of balls bigger than 70: real time simulation is too computationally heavy, so simulation and displaying will be performed separately.")
+            warnings.warn("Number of balls bigger than 70: real time simulation is too computationally heavy, "
+                          "so simulation and displaying will be performed separately.")
             time.sleep(1)
             Data.buffering_data = []
         print("Initialising balls...", flush=True)
@@ -325,8 +330,8 @@ class PopulationMethods:
 
     @staticmethod
     def set_moving(population):
-        for ball in population[:int(GlobalSetup.SOCIAL_DISTANCING * len(population))]:
-            ball.moving = True
+        for i, ball in enumerate(population):
+            ball.moving = i > GlobalSetup.SOCIAL_DISTANCING
 
     @staticmethod
     def balls_collision(ball1, ball2):
@@ -549,19 +554,28 @@ class Graphics:
 
         Graphics.write("Infected:", Graphics.shifted((w//3 + w//30, h*2//5 - 8*shift)))
         Graphics.write("Duration:", Graphics.shifted((w//3 + w//30, h*2//5 - 9*shift)))
+        Graphics.write("\u03B2 (SIR model):", Graphics.shifted((w//3 + w//30, h*2//5 - 10*shift)))
+        Graphics.write("\u03B3 (SIR model):", Graphics.shifted((w//3 + w//30, h*2//5 - 11*shift)))
+        Graphics.write("R0:", Graphics.shifted((w//3 + w//30, h*2//5 - 12*shift)))
 
         # Values
         Graphics.write(f"{GlobalSetup.NO_BALLS}", Graphics.shifted((w // 2, h * 2 // 5 - 2 * shift)))
         Graphics.write(f"{GlobalSetup.BALL_SPEED}", Graphics.shifted((w // 2, h * 2 // 5 - 3 * shift)))
         if GlobalSetup.RANDOM_RECOVERY_TIME:
-            Graphics.write(f"N({GlobalSetup.RECOVERY_TIME}, {GlobalSetup.RECOVERY_STANDARD_DEVIATION})", Graphics.shifted((w // 2, h * 2 // 5 - 4 * shift)))
+            Graphics.write(f"N({GlobalSetup.RECOVERY_TIME}, {GlobalSetup.RECOVERY_STANDARD_DEVIATION})",
+                           Graphics.shifted((w // 2, h * 2 // 5 - 4 * shift)))
         else:
             Graphics.write(f"{GlobalSetup.RECOVERY_TIME}", Graphics.shifted((w//2, h*2//5 - 4*shift)))
         Graphics.write(f"{GlobalSetup.SOCIAL_DISTANCING}", Graphics.shifted((w // 2, h * 2 // 5 - 5 * shift)))
         Graphics.write(f"{GlobalSetup.BALL_RADIUS}", Graphics.shifted((w // 2, h * 2 // 5 - 6 * shift)))
 
-        Graphics.write(f"{Data.data[-1][States.RECOVERED] / GlobalSetup.NO_BALLS * 100: .2f}%", Graphics.shifted((w // 2, h * 2 // 5 - 8 * shift)))
+        Graphics.write(f"{Data.data[-1][States.RECOVERED] / GlobalSetup.NO_BALLS * 100: .2f}%",
+                       Graphics.shifted((w // 2, h * 2 // 5 - 8 * shift)))
         Graphics.write(f"{len(Data.data)} iterations", Graphics.shifted((w//2, h*2//5 - 9*shift)))
+        beta, gamma, r0 = Data.SIR_analyse()
+        Graphics.write(f"{beta: .4f}", Graphics.shifted((w//2, h*2//5 - 10*shift)))
+        Graphics.write(f"{gamma: .4f}", Graphics.shifted((w//2, h*2//5 - 11*shift)))
+        Graphics.write(f"{r0: .4f}", Graphics.shifted((w//2, h*2//5 - 12*shift)))
 
         tt.update()
         tt.onclick(main)
@@ -607,6 +621,25 @@ class Data:
     """
     data = [Iteration(GlobalSetup.NO_BALLS - 1, 1, 0)]
     buffering_data = None
+
+    @staticmethod
+    def SIR_analyse():
+        N = GlobalSetup.NO_BALLS
+        S = [el[States.HEALTHY] for el in Data.data]
+        I = [el[States.INFECTED] for el in Data.data]
+        R = [el[States.RECOVERED] for el in Data.data]
+
+        dSdt = [n - c for c, n in zip(S[:-1], S[1:])]
+        dRdt = [n - c for c, n in zip(R[:-1], R[1:])]
+
+        beta_data = [-dSdt[i]*N/I[i]/S[i] for i in range(len(dSdt))]
+        beta_estimator = sum(beta_data)/len(beta_data)
+
+        gamma_data = [dRdt[i]/I[i] for i in range(len(dRdt))]
+        gamma_estimator = sum(gamma_data)/len(gamma_data)
+
+        R0 = beta_estimator/gamma_estimator
+        return beta_estimator, gamma_estimator, R0
 
 
 def main():
