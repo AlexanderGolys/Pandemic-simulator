@@ -7,14 +7,18 @@ import copy
 
 
 class GlobalSetup:
-    ball_radius = 10
-    ball_speed = 3000
+    ball_radius = 15
+    ball_speed = 500
     FPS = 60
     no_balls = 70               # number of balls
     social_distancing = .2      # not moving balls to all balls ratio
-    recovery_time = 500
+    recovery_time = 100
     window_resolution = (1600, 900)
     iterations = 10000
+    division_threshold = 5
+    collision_threshold = 1
+    random_recovery_time = True
+    recovery_sd = 30
 
 
 class Vector:
@@ -100,6 +104,11 @@ class Ball:
         self.color = Colors.get_color[self.state]
         self.infection_time = 0
         self.collision_time = 0
+        self.collision = False
+        self.recovery_time = GlobalSetup.recovery_time
+        if GlobalSetup.random_recovery_time:
+            self.recovery_time = random.gauss(GlobalSetup.recovery_time, GlobalSetup.recovery_sd)
+        self.infected = 0
 
     @property
     def center(self):
@@ -143,6 +152,12 @@ class Ball:
         tt.setpos(Graphics.shifted(self.center))
         tt.dot(2*self.radius, self.color)
 
+    @staticmethod
+    def draw_offline(center, color):
+        tt.up()
+        tt.setpos(Graphics.shifted(center))
+        tt.dot(2*GlobalSetup.ball_radius, color)
+
 
 class PopulationMethods:
     @staticmethod
@@ -153,14 +168,18 @@ class PopulationMethods:
     @staticmethod
     def constructor():
         if GlobalSetup.no_balls > 70:
-            warnings.warn("Simulation can be a bit laggy with selected numbers of balls. Suggested number of balls: 70")
-        print("Initialising balls...")
+            warnings.warn("Number of balls bigger than 70: real time simulation is too computationally heavy, so simulation and displaying will be performed separately.")
+            time.sleep(1)
+            Data.buffering_data = []
+        print("Initialising balls...", flush=True)
         population = []
         available = {(i, j) for i in range(GlobalSetup.ball_radius,
                                            GlobalSetup.window_resolution[0] - GlobalSetup.ball_radius)
                      for j in range(GlobalSetup.ball_radius,
                                     GlobalSetup.window_resolution[1] - GlobalSetup.ball_radius)}
-        for _ in range(GlobalSetup.no_balls):
+        for i in range(GlobalSetup.no_balls):
+            if i % (GlobalSetup.no_balls//10) == 0:
+                print(f"{100*i//GlobalSetup.no_balls}% ({i}/{GlobalSetup.no_balls})")
             ball = Ball(available)
             population.append(ball)
             for c1 in range(ball.x - 2*ball.radius, ball.x + 2*ball.radius + 1):
@@ -189,12 +208,10 @@ class PopulationMethods:
             ball2.velocity -= x_diff.constant_mul(2 * ((v2 - v1) * x_diff / x_diff.len() ** 2))
         if ball1.state == States.INFECTED and ball2.state == States.HEALTHY:
             ball2.state = States.INFECTED
-            data[-1][0] -= 1
-            data[-1][1] += 1
+            Data.data[-1].infect()
         if ball1.state == States.HEALTHY and ball2.state == States.INFECTED:
             ball1.state = States.INFECTED
-            data[-1][0] -= 1
-            data[-1][1] += 1
+            Data.data[-1].infect()
 
     @staticmethod
     def update_population(population):
@@ -203,21 +220,26 @@ class PopulationMethods:
                 ball.center = ball.velocity.shift(ball.center)
             if ball.state == States.INFECTED:
                 ball.infection_time += 1
-                if ball.infection_time > GlobalSetup.recovery_time:
+                if ball.infection_time > ball.recovery_time:
                     ball.state = States.RECOVERED
-                    data[-1][1] -= 1
-                    data[-1][2] += 1
+                    Data.data[-1].recover()
+            if not ball.collision:
+                ball.collision_time = 0
+            ball.collision = False
 
         ball_set = set(population)
         second_ball_set = set(population)
         for ball1 in ball_set:
             second_ball_set.difference_update({ball1})
             for ball2 in second_ball_set:
-                if ball1 - ball2 <= 1:
+                if ball1 - ball2 <= GlobalSetup.collision_threshold:
                     PopulationMethods.balls_collision(ball1, ball2)
+                    ball1.collision = True
+                    ball2.collision = True
                     ball1.collision_time += 1
                     ball2.collision_time += 1
-                    if ball1.collision_time > GlobalSetup.FPS/2 and ball2.collision_time > GlobalSetup.FPS/2:
+                    if ball1.collision_time > GlobalSetup.division_threshold \
+                            and ball2.collision_time > GlobalSetup.division_threshold:
                         if ball1.velocity.len() > ball2.velocity.len():
                             shift = copy.deepcopy(ball1.velocity)
                             shift.normalise()
@@ -231,11 +253,11 @@ class PopulationMethods:
                         ball1.collision_time = 0
                         ball2.collision_time = 0
 
-            if ball1.x - ball1.radius <= 2:
+            if ball1.x - ball1.radius <= GlobalSetup.collision_threshold:
                 ball1.velocity.right()
             if ball1.x + ball1.radius >= GlobalSetup.window_resolution[0]-2:
                 ball1.velocity.left()
-            if ball1.y - ball1.radius <= 2:
+            if ball1.y - ball1.radius <= GlobalSetup.collision_threshold:
                 ball1.velocity.up()
             if ball1.y + ball1.radius >= GlobalSetup.window_resolution[1]-2:
                 ball1.velocity.down()
@@ -252,6 +274,12 @@ class Graphics:
         tt.hideturtle()
 
     @staticmethod
+    def write(string, center):
+        tt.up()
+        tt.setpos(center)
+        tt.write(string, align="left", font=("Cantarell", 14, "normal"))
+
+    @staticmethod
     def draw(population):
         tt.reset()
         tt.hideturtle()
@@ -259,6 +287,15 @@ class Graphics:
             ball.draw()
         tt.update()
         time.sleep(1/GlobalSetup.FPS)
+
+    @staticmethod
+    def offline_draw(states):
+        tt.reset()
+        tt.hideturtle()
+        for state in states:
+            Ball.draw_offline(*state)
+        tt.update()
+        time.sleep(1/(2*GlobalSetup.FPS))
 
     @staticmethod
     def shifted(coords):
@@ -293,12 +330,11 @@ class Graphics:
 
     @staticmethod
     def plot_line(jump, value_jump, w, h, what_to_plot):
-        prev_x_index = 0
         current_x_index = 0
-        prev_y = data[current_x_index][what_to_plot] * value_jump + 11 * h // 20
+        prev_y = Data.data[current_x_index][what_to_plot] * value_jump + 11 * h // 20
         for current_x_pixel in range(w // 3 + h // 20 + 2, w * 2 // 3 - h // 20):
             current_x_index += jump
-            current_y = data[int(current_x_index)][what_to_plot] * value_jump + 11 * h // 20
+            current_y = Data.data[int(current_x_index)][what_to_plot] * value_jump + 11 * h // 20
             Graphics.draw_line(Graphics.shifted((current_x_pixel - 1, prev_y)),
                                Graphics.shifted((current_x_pixel, current_y)), Colors.RED, 2)
             prev_y = current_y
@@ -307,9 +343,9 @@ class Graphics:
     def plot_area(jump, y_axis, w, h):
         current_x_index = 0
         for current_x_pixel in range(w // 3 + h // 20 + 2, w * 2 // 3 - h // 20):
-            len1 = y_axis * data[int(current_x_index)][0] / GlobalSetup.no_balls
-            len2 = y_axis * data[int(current_x_index)][1] / GlobalSetup.no_balls
-            len3 = y_axis * data[int(current_x_index)][2] / GlobalSetup.no_balls
+            len1 = y_axis * Data.data[int(current_x_index)][States.HEALTHY] / GlobalSetup.no_balls
+            len2 = y_axis * Data.data[int(current_x_index)][States.INFECTED] / GlobalSetup.no_balls
+            len3 = y_axis * Data.data[int(current_x_index)][States.RECOVERED] / GlobalSetup.no_balls
             Graphics.draw_line(Graphics.shifted((current_x_pixel, 11*h//20)),
                                Graphics.shifted((current_x_pixel, 11*h//20+len3)), Colors.YELLOW, 1)
             Graphics.draw_line(Graphics.shifted((current_x_pixel, 11*h//20+len3)),
@@ -329,8 +365,8 @@ class Graphics:
 
         x_axis_len = w//3 - h//10 - 1
         y_axis_len = h*3//10
-        jump = len(data) / x_axis_len
-        value_jump = y_axis_len / GlobalSetup.no_balls
+        jump = len(Data.data) / x_axis_len
+        # value_jump = y_axis_len / GlobalSetup.no_balls
         Graphics.plot_area(jump, y_axis_len, w, h)
 
         # draw axes
@@ -349,31 +385,98 @@ class Graphics:
         Graphics.draw_line(Graphics.shifted((w*2//3 - h//20, h*11//20)),
                            Graphics.shifted((w*2//3 - h//20 - h//200, h*11//20 - h//200)))
 
-        # Graphics.plot_line(jump, value_jump, w, h, 0)
-        # Graphics.plot_line(jump, value_jump, w, h, 1)
-        # Graphics.plot_line(jump, value_jump, w, h, 2)
+        shift = 25
+        Graphics.write("Population size:", Graphics.shifted((w//3 + w//30, h*2//5 - 2*shift)))
+        Graphics.write("Speed:", Graphics.shifted((w//3 + w//30, h*2//5 - 3*shift)))
+        Graphics.write("Recovery:", Graphics.shifted((w//3 + w//30, h*2//5 - 4*shift)))
+        Graphics.write("Social distancing:", Graphics.shifted((w//3 + w//30, h*2//5 - 5*shift)))
+        Graphics.write("Infected:", Graphics.shifted((w//3 + w//30, h*2//5 - 6*shift)))
+        Graphics.write("Duration:", Graphics.shifted((w//3 + w//30, h*2//5 - 7*shift)))
+        Graphics.write("Peak R0:", Graphics.shifted((w//3 + w//30, h*2//5 - 8*shift)))
+
+        Graphics.write(f"{GlobalSetup.no_balls}", Graphics.shifted((w//2, h*2//5 - 2*shift)))
+        Graphics.write(f"{GlobalSetup.ball_speed}", Graphics.shifted((w//2, h*2//5 - 3*shift)))
+        if GlobalSetup.random_recovery_time:
+            Graphics.write(f"N({GlobalSetup.recovery_time}, {GlobalSetup.recovery_sd})", Graphics.shifted((w//2, h*2//5 - 4*shift)))
+        else:
+            Graphics.write(f"{GlobalSetup.recovery_time}", Graphics.shifted((w//2, h*2//5 - 4*shift)))
+        Graphics.write(f"{GlobalSetup.social_distancing}", Graphics.shifted((w//2, h*2//5 - 5*shift)))
+        Graphics.write(f"{Data.data[-1][States.RECOVERED]/GlobalSetup.no_balls*100: .2f}%", Graphics.shifted((w//2, h*2//5 - 6*shift)))
+        Graphics.write(f"{len(Data.data)} iterations", Graphics.shifted((w//2, h*2//5 - 7*shift)))
+        Graphics.write("Coming soon...", Graphics.shifted((w//2, h*2//5 - 8*shift)))
+
+        # tt.up()
+        # tt.setpos(Graphics.shifted((w//2, h*2//5 - 10*shift)))
+        # tt.write("Click anywhere to start again", align="center", font=("Cantarell", 14, "normal"))
+
+
+        # Graphics.plot_line(jump, value_jump, w, h, States.HEALTHY)
+        # Graphics.plot_line(jump, value_jump, w, h, States.INFECTED)
+        # Graphics.plot_line(jump, value_jump, w, h, States.RECOVERED)
 
         tt.update()
+        tt.onclick(main)
 
 
-def main():
-    global data
-    data = [[GlobalSetup.no_balls-1, 1, 0]]
+class Day:
+    def __init__(self, healthy, infected, recovered):
+        self.healthy = healthy
+        self.infected = infected
+        self.recovered = recovered
+
+    def __getitem__(self, item):
+        if item == States.INFECTED:
+            return self.infected
+        if item == States.RECOVERED:
+            return self.recovered
+        if item == States.HEALTHY:
+            return self.healthy
+        raise KeyError("Key to Day cell must be a state.")
+
+    def infect(self):
+        self.healthy -= 1
+        self.infected += 1
+
+    def recover(self):
+        self.infected -= 1
+        self.recovered += 1
+
+
+class Data:
+    data = [Day(GlobalSetup.no_balls-1, 1, 0)]
+    buffering_data = None
+
+
+def main(*args):
     population = PopulationMethods.constructor()
     PopulationMethods.set_moving(population)
-    Graphics.init()
-    for i in range(GlobalSetup.iterations):
-        data.append(copy.deepcopy(data[-1]))
-        Graphics.draw(population)
-        PopulationMethods.update_population(population)
-        if data[-1][1] == 0:
-            break
+    if Data.buffering_data is None:
+        Graphics.init()
+        for i in range(GlobalSetup.iterations):
+            Data.data.append(copy.deepcopy(Data.data[-1]))
+            Graphics.draw(population)
+            PopulationMethods.update_population(population)
+            if Data.data[-1][States.INFECTED] == 0:
+                break
+
+    else:
+        print("Simulating pandemic...")
+        for i in range(GlobalSetup.iterations):
+            Data.data.append(copy.deepcopy(Data.data[-1]))
+            PopulationMethods.update_population(population)
+            Data.buffering_data.append([])
+            for ball in population:
+                Data.buffering_data[-1].append((ball.center, ball.color))
+            if Data.data[-1][States.INFECTED] == 0:
+                break
+        Graphics.init()
+        for states in Data.buffering_data:
+            Graphics.offline_draw(states)
+
     Graphics.draw_stats()
     tt.exitonclick()
+    tt.onclick(main)
 
 
 if __name__ == "__main__":
     main()
-
-
-
