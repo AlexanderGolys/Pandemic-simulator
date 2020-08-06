@@ -2,9 +2,7 @@ import turtle as tt
 import random
 from enum import Enum, auto
 import time
-import warnings
 import copy
-import math
 
 
 def positive_int_check(constant, name):
@@ -59,21 +57,13 @@ class GlobalSetup:
     BALL_RADIUS = 10
     positive_int_check(BALL_RADIUS, "Radius")
 
-    BALL_SPEED = 300  # Speed, as an initial norm of velocity vector, doesn't have to be int, but has to be positive
-    positive_int_check(int(BALL_SPEED), "Speed")
-
-    FPS = 60
+    FPS = 3
     positive_int_check(FPS, "FPS")
 
-    NO_BALLS = 100
+    NO_BALLS = 300
     positive_int_check(NO_BALLS, "Number of particles")
 
-    SOCIAL_DISTANCING = .2
-    if not 0 <= SOCIAL_DISTANCING <= 1:
-        raise TypeError(f"Social distancing parameter must belong to <0, 1> instead of {SOCIAL_DISTANCING}.")
-
-    RECOVERY_TIME = 300
-    positive_int_check(RECOVERY_TIME, "Expected recovery time")
+    RECOVERY_PROB = .1
 
     WINDOW_RESOLUTION = (1600, 900)
     positive_int_check(WINDOW_RESOLUTION[0], "Window width")
@@ -81,88 +71,6 @@ class GlobalSetup:
 
     ITERATIONS = 10000
     positive_int_check(ITERATIONS, "Maximal number of iterations")
-
-    DIVISION_THRESHOLD = 5
-    positive_int_check(DIVISION_THRESHOLD, "Division threshold")
-
-    COLLISION_THRESHOLD = 1
-    if not isinstance(COLLISION_THRESHOLD, int) or COLLISION_THRESHOLD < 0:
-        raise TypeError(f"Collision threshold must be a non-negative integer instead of {COLLISION_THRESHOLD}.")
-
-    RANDOM_RECOVERY_TIME = True
-    if not isinstance(RANDOM_RECOVERY_TIME, bool):
-        raise TypeError(f"RANDOM_RECOVERY_TIME must be a bool instead of {RANDOM_RECOVERY_TIME}.")
-
-    RECOVERY_STANDARD_DEVIATION = 30
-    if RECOVERY_STANDARD_DEVIATION < 0:
-        raise TypeError(f"Standard deviation must be non-negative instead of {RECOVERY_STANDARD_DEVIATION}.")
-
-
-class Vector:
-    """
-    Class representing simple 2D vector.
-
-    Methods:
-        __add__(self, other): Standard vector addition.
-        __mul__(self, other): Dot product.
-        __sub__(self, other): Standard vector subtraction.
-        len(self): Euclidean norm.
-        neg(self): Multiplication by -1.
-        up(self): changing y coordinate to be positive (bouncing off bottom wall)
-        down(self): changing y coordinate to be negative (bouncing off top wall)
-        left(self): changing x coordinate to be negative (bouncing off left wall)
-        right(self): changing x coordinate to be positive (bouncing off right wall)
-        normalise(self): Normalise itself.
-        denormalise_to_speed(self): Increasing it's norm to the value of GlobalSetup.BALL_SPEED.
-        shift(self, coords): Shifting coords with itself.
-        constant_mul(self, c): Multiplication by number.
-
-    """
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-
-    def __add__(self, other):
-        return Vector(self.x + other.x, self.y + other.y)
-
-    def __mul__(self, other):
-        return self.x * other.x + self.y * other.y
-
-    def __sub__(self, other):
-        return Vector(self.x - other.x, self.y - other.y)
-
-    def len(self):
-        return (self.x ** 2 + self.y ** 2)**(1/2)
-
-    def neg(self):
-        self.x *= -1
-        self.y *= -1
-
-    def up(self):
-        self.y = abs(self.y)
-
-    def down(self):
-        self.y = -abs(self.y)
-
-    def left(self):
-        self.x = -abs(self.x)
-
-    def right(self):
-        self.x = abs(self.x)
-
-    def normalise(self):
-        self.x /= self.len()
-        self.y /= self.len()
-
-    def denormalise_to_speed(self):
-        self.x *= (GlobalSetup.BALL_SPEED / GlobalSetup.FPS) ** (1 / 2)
-        self.y *= (GlobalSetup.BALL_SPEED / GlobalSetup.FPS) ** (1 / 2)
-
-    def shift(self, coords):
-        return coords[0] + self.x, coords[1] + self.y
-
-    def constant_mul(self, c):
-        return Vector(self.x*c, self.y*c)
 
 
 class States(Enum):
@@ -182,7 +90,7 @@ class Colors:
     GREEN = (0x22, 0xEE, 0x22)
     RED = (0xEE, 0x22, 0x22)
     # YELLOW = (0xFF, 0x7F, 0)
-    YELLOW = (0xAA, 0xAA, 0xAA)
+    GRAY = (0xAA, 0xAA, 0xAA)
 
     BG_COLOR = (0xEE, 0xEE, 0xEE)
     WHITE = (0xFF, 0xFF, 0xFF)
@@ -191,7 +99,7 @@ class Colors:
     get_color = {
         States.HEALTHY: GREEN,
         States.INFECTED: RED,
-        States.RECOVERED: YELLOW
+        States.RECOVERED: GRAY
     }
 
 
@@ -203,21 +111,15 @@ class Ball:
         x (int): First coordinate.
         y (int): Second coordinate.
         radius (int): Radius of the particle, by default value of GlobalSetup.BALL_RADIUS.
-        moving (bool): Information if particle is moving.
-        velocity (Vector): Velocity vector.
         state (key of States): Particle state (by default healthy).
         color (tuple[int]): Particle color, state dependent.
-        infection_time: Number of iterations that particle is infected (if not infected: 0)
-        collision_time: Number of iteration that particle is jammed.
-        recovery_time (int): Recovery time.
+
 
     Properties:
         center.getter: Returning center.
         center.setter: Setting center and x, y accordingly.
         state.getter: Returning state.
         state.setter: Setting state and changing color.
-        moving.getter: Returning moving.
-        moving.setter: If moving is False, set velocity to the zero vector.
 
     Methods:
         __sub__(self, other): Calculating the distance between particles.
@@ -227,23 +129,16 @@ class Ball:
 
 
     """
-    def __init__(self, av):
-        self.center = list(random.choice(tuple(av)))
-        self.x = self.center[0]
-        self.y = self.center[1]
+    def __init__(self, corners_x, corners_y):
+        self.corners_x = corners_x
+        self.corners_y = corners_y
+        self.center = (random.randint(*corners_x), random.randint(*corners_y))
         self.radius = GlobalSetup.BALL_RADIUS
-        self.moving = None
-        self.velocity = Vector(random.uniform(-1, 1), random.uniform(-1, 1))
-        self.velocity.normalise()
-        self.velocity.denormalise_to_speed()
         self.state = States.HEALTHY
         self.color = Colors.get_color[self.state]
-        self.infection_time = 0
-        self.collision_time = 0
-        self.collision = False
-        self.recovery_time = GlobalSetup.RECOVERY_TIME
-        if GlobalSetup.RANDOM_RECOVERY_TIME:
-            self.recovery_time = random.gauss(GlobalSetup.RECOVERY_TIME, GlobalSetup.RECOVERY_STANDARD_DEVIATION)
+
+    def random_pos(self):
+        self.center = (random.randint(*self.corners_x), random.randint(*self.corners_y))
 
     @property
     def center(self):
@@ -256,6 +151,22 @@ class Ball:
         self.y = new[1]
 
     @property
+    def x(self):
+        return self.center[0]
+
+    @x.setter
+    def x(self, value):
+        self.__center = (value, self.center[1])
+
+    @property
+    def y(self):
+        return self.center[1]
+
+    @y.setter
+    def y(self, value):
+        self.__center = (self.center[0], value)
+
+    @property
     def state(self):
         return self.__state
 
@@ -263,16 +174,6 @@ class Ball:
     def state(self, state):
         self.__state = state
         self.color = Colors.get_color[self.__state]
-
-    @property
-    def moving(self):
-        return self.__moving
-
-    @moving.setter
-    def moving(self, other):
-        self.__moving = other
-        if not other:
-            self.velocity = Vector(0, 0)
 
     def __sub__(self, other):
         x1, y1 = self.center
@@ -303,51 +204,18 @@ class PopulationMethods:
 
     @staticmethod
     def constructor():
-        if GlobalSetup.NO_BALLS > 70:
-            warnings.warn("Number of balls bigger than 70: real time simulation is too computationally heavy, "
-                          "so simulation and displaying will be performed separately.")
-            time.sleep(1)
-            Data.buffering_data = []
-        print("Initialising balls...", flush=True)
         population = []
-        available = {(i, j) for i in range(GlobalSetup.BALL_RADIUS,
-                                           GlobalSetup.WINDOW_RESOLUTION[0] - GlobalSetup.BALL_RADIUS)
-                     for j in range(GlobalSetup.BALL_RADIUS,
-                                    GlobalSetup.WINDOW_RESOLUTION[1] - GlobalSetup.BALL_RADIUS)}
         for i in range(GlobalSetup.NO_BALLS):
-            if i % (GlobalSetup.NO_BALLS // 10) == 0:
-                print(f"{100*i//GlobalSetup.NO_BALLS}% ({i}/{GlobalSetup.NO_BALLS})")
-            ball = Ball(available)
+            ball = Ball((5*GlobalSetup.BALL_RADIUS, GlobalSetup.WINDOW_RESOLUTION[0]-5*GlobalSetup.BALL_RADIUS),
+                        (5*GlobalSetup.BALL_RADIUS, GlobalSetup.WINDOW_RESOLUTION[1]-5*GlobalSetup.BALL_RADIUS))
             population.append(ball)
-            for c1 in range(ball.x - 2*ball.radius, ball.x + 2*ball.radius + 1):
-                for c2 in range(ball.y - 2*ball.radius, ball.y + 2*ball.radius + 1):
-                    available.difference_update({(c1, c2)})
 
         population[-1].state = States.INFECTED
         print(f"Initialised {len(population)} samples.")
-
         return population
 
     @staticmethod
-    def set_moving(population):
-        for i, ball in enumerate(population):
-            ball.moving = i > GlobalSetup.SOCIAL_DISTANCING
-
-    @staticmethod
     def balls_collision(ball1, ball2):
-        v1 = ball1.velocity
-        v2 = ball2.velocity
-        if ball1.moving and ball2.moving:
-            x_diff = Vector(ball1.x - ball2.x, ball1.y - ball2.y)
-            ball1.velocity -= x_diff.constant_mul((v1 - v2) * x_diff / x_diff.len() ** 2)
-            x_diff.neg()
-            ball2.velocity -= x_diff.constant_mul((v2 - v1) * x_diff / x_diff.len() ** 2)
-        elif ball1 - ball2 <= 2 and ball1.moving and not ball2.moving:
-            x_diff = Vector(ball1.x - ball2.x, ball1.y - ball2.y)
-            ball1.velocity -= x_diff.constant_mul(2 * ((v1 - v2) * x_diff / x_diff.len() ** 2))
-        else:
-            x_diff = Vector(ball2.x - ball1.x, ball2.y - ball1.y)
-            ball2.velocity -= x_diff.constant_mul(2 * ((v2 - v1) * x_diff / x_diff.len() ** 2))
         if ball1.state == States.INFECTED and ball2.state == States.HEALTHY:
             ball2.state = States.INFECTED
             Data.data[-1].infect()
@@ -357,52 +225,20 @@ class PopulationMethods:
 
     @staticmethod
     def update_population(population):
-        for ball in population:
-            if ball.moving:
-                ball.center = ball.velocity.shift(ball.center)
-            if ball.state == States.INFECTED:
-                ball.infection_time += 1
-                if ball.infection_time > ball.recovery_time:
-                    ball.state = States.RECOVERED
-                    Data.data[-1].recover()
-            if not ball.collision:
-                ball.collision_time = 0
-            ball.collision = False
-
         ball_set = set(population)
         second_ball_set = set(population)
         for ball1 in ball_set:
             second_ball_set.difference_update({ball1})
             for ball2 in second_ball_set:
-                if ball1 - ball2 <= GlobalSetup.COLLISION_THRESHOLD:
+                if ball1 - ball2 <= 0:
                     PopulationMethods.balls_collision(ball1, ball2)
-                    ball1.collision = True
-                    ball2.collision = True
-                    ball1.collision_time += 1
-                    ball2.collision_time += 1
-                    if ball1.collision_time > GlobalSetup.DIVISION_THRESHOLD \
-                            and ball2.collision_time > GlobalSetup.DIVISION_THRESHOLD:
-                        if ball1.velocity.len() > ball2.velocity.len():
-                            shift = copy.deepcopy(ball1.velocity)
-                            shift.normalise()
-                            shift = shift.constant_mul(2*ball1.radius)
-                            ball1.center = shift.shift(ball1.center)
-                        else:
-                            shift = copy.deepcopy(ball2.velocity)
-                            shift.normalise()
-                            shift = shift.constant_mul(2*ball2.radius)
-                            ball2.center = shift.shift(ball2.center)
-                        ball1.collision_time = 0
-                        ball2.collision_time = 0
 
-            if ball1.x - ball1.radius <= GlobalSetup.COLLISION_THRESHOLD:
-                ball1.velocity.right()
-            if ball1.x + ball1.radius >= GlobalSetup.WINDOW_RESOLUTION[0]-2:
-                ball1.velocity.left()
-            if ball1.y - ball1.radius <= GlobalSetup.COLLISION_THRESHOLD:
-                ball1.velocity.up()
-            if ball1.y + ball1.radius >= GlobalSetup.WINDOW_RESOLUTION[1]-2:
-                ball1.velocity.down()
+        for ball in population:
+            ball.random_pos()
+            if ball.state == States.INFECTED:
+                if random.random() < GlobalSetup.RECOVERY_PROB:
+                    ball.state = States.RECOVERED
+                    Data.data[-1].recover()
 
 
 class Graphics:
@@ -506,7 +342,7 @@ class Graphics:
             len2 = y_axis * Data.data[int(current_x_index)][States.INFECTED] / GlobalSetup.NO_BALLS
             len3 = y_axis * Data.data[int(current_x_index)][States.RECOVERED] / GlobalSetup.NO_BALLS
             Graphics.draw_line(Graphics.shifted((current_x_pixel, 11*h//20)),
-                               Graphics.shifted((current_x_pixel, 11*h//20+len3)), Colors.YELLOW, 1)
+                               Graphics.shifted((current_x_pixel, 11*h//20+len3)), Colors.GRAY, 1)
             Graphics.draw_line(Graphics.shifted((current_x_pixel, 11*h//20+len3)),
                                Graphics.shifted((current_x_pixel, 11*h//20+len3+len2)), Colors.RED, 1)
             Graphics.draw_line(Graphics.shifted((current_x_pixel, 11*h//20+len3+len2)),
@@ -560,13 +396,9 @@ class Graphics:
 
         # Values
         Graphics.write(f"{GlobalSetup.NO_BALLS}", Graphics.shifted((w // 2, h * 2 // 5 - 2 * shift)))
-        Graphics.write(f"{GlobalSetup.BALL_SPEED}", Graphics.shifted((w // 2, h * 2 // 5 - 3 * shift)))
-        if GlobalSetup.RANDOM_RECOVERY_TIME:
-            Graphics.write(f"N({GlobalSetup.RECOVERY_TIME}, {GlobalSetup.RECOVERY_STANDARD_DEVIATION})",
-                           Graphics.shifted((w // 2, h * 2 // 5 - 4 * shift)))
-        else:
-            Graphics.write(f"{GlobalSetup.RECOVERY_TIME}", Graphics.shifted((w//2, h*2//5 - 4*shift)))
-        Graphics.write(f"{GlobalSetup.SOCIAL_DISTANCING}", Graphics.shifted((w // 2, h * 2 // 5 - 5 * shift)))
+        Graphics.write(f"No speed", Graphics.shifted((w // 2, h * 2 // 5 - 3 * shift)))
+        Graphics.write(f"{GlobalSetup.RECOVERY_PROB} chance/iteration", Graphics.shifted((w//2, h*2//5 - 4*shift)))
+        Graphics.write(f"No social distancing", Graphics.shifted((w // 2, h * 2 // 5 - 5 * shift)))
         Graphics.write(f"{GlobalSetup.BALL_RADIUS}", Graphics.shifted((w // 2, h * 2 // 5 - 6 * shift)))
 
         Graphics.write(f"{Data.data[-1][States.RECOVERED] / GlobalSetup.NO_BALLS * 100: .2f}%",
@@ -578,7 +410,7 @@ class Graphics:
         Graphics.write(f"{r0: .4f}", Graphics.shifted((w//2, h*2//5 - 12*shift)))
 
         tt.update()
-        tt.onclick(main)
+        tt.exitonclick()
 
 
 class Iteration:
@@ -647,7 +479,6 @@ def main():
     Main loop.
     """
     population = PopulationMethods.constructor()
-    PopulationMethods.set_moving(population)
     if Data.buffering_data is None:
         Graphics.init()
         for i in range(GlobalSetup.ITERATIONS):
@@ -672,7 +503,6 @@ def main():
             Graphics.offline_draw(states)
 
     Graphics.draw_stats()
-    tt.exitonclick()
 
 
 if __name__ == "__main__":
