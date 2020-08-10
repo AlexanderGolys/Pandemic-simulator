@@ -54,18 +54,18 @@ class GlobalSetup:
         RECOVERY_STANDARD_DEVIATION: Parameter of recovery time distribution in case of RANDOM_RECOVERY_TIME being True.
     """
 
-    BALL_RADIUS = 10
+    BALL_RADIUS = 5
     positive_int_check(BALL_RADIUS, "Radius")
 
     FPS = 3
     positive_int_check(FPS, "FPS")
 
-    NO_BALLS = 300
+    NO_BALLS = 500
     positive_int_check(NO_BALLS, "Number of particles")
 
-    RECOVERY_PROB = .1
+    RECOVERY_PROB = .07
 
-    WINDOW_RESOLUTION = (1600, 900)
+    WINDOW_RESOLUTION = (1200, 800)
     positive_int_check(WINDOW_RESOLUTION[0], "Window width")
     positive_int_check(WINDOW_RESOLUTION[1], "Window height")
 
@@ -401,7 +401,7 @@ class Graphics:
         Graphics.write(f"No social distancing", Graphics.shifted((w // 2, h * 2 // 5 - 5 * shift)))
         Graphics.write(f"{GlobalSetup.BALL_RADIUS}", Graphics.shifted((w // 2, h * 2 // 5 - 6 * shift)))
 
-        Graphics.write(f"{Data.data[-1][States.RECOVERED] / GlobalSetup.NO_BALLS * 100: .2f}%",
+        Graphics.write(f"{Data.data[-1][States.RECOVERED] / GlobalSetup.NO_BALLS * 100: .2f}% ({Data.data[-1][States.RECOVERED]})",
                        Graphics.shifted((w // 2, h * 2 // 5 - 8 * shift)))
         Graphics.write(f"{len(Data.data)} iterations", Graphics.shifted((w//2, h*2//5 - 9*shift)))
         beta, gamma, r0 = Data.SIR_analyse()
@@ -483,8 +483,8 @@ def main():
         Graphics.init()
         for i in range(GlobalSetup.ITERATIONS):
             Data.data.append(copy.deepcopy(Data.data[-1]))
-            Graphics.draw(population)
             PopulationMethods.update_population(population)
+            Graphics.draw(population)
             if Data.data[-1][States.INFECTED] == 0:
                 break
 

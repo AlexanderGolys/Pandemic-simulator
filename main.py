@@ -1,10 +1,11 @@
-import turtle as tt
 import random
 from enum import Enum, auto
 import time
 import warnings
 import copy
-import math
+
+import numpy as np
+import turtle as tt
 
 
 def positive_int_check(constant, name):
@@ -640,6 +641,38 @@ class Data:
 
         R0 = beta_estimator/gamma_estimator
         return beta_estimator, gamma_estimator, R0
+
+    def SIR_analyse_improved(self, precision=.01):
+        N = GlobalSetup.NO_BALLS
+        S = np.array([el[States.HEALTHY] for el in self.data])
+        I = np.array([el[States.INFECTED] for el in self.data])
+        R = np.array([el[States.RECOVERED] for el in self.data])
+        iterations = len(S)
+
+        loss = {}
+        for gamma in np.arange(0, 1, precision):
+            for beta in np.arange(0, 1, precision):
+                numerical_S, numerical_I = self.model_with_euler_method(gamma, beta, iterations, N)
+                difference_S = np.sum((numerical_S - S)**2)
+                difference_I = np.sum((numerical_I - I)**2)
+                difference = difference_S + difference_I
+                loss[(beta, gamma)] = difference
+
+        beta, gamma = max(loss, key=loss.get)
+        R0 = beta/gamma
+
+        return beta, gamma, R0
+
+    @staticmethod
+    def model_with_euler_method(gamma, beta, iterations, N, precision=100):
+        S = [N-1]
+        I = [1]
+        for _ in iterations*precision:
+            ds = -beta * I[-1] * S[-1] / N
+            di = beta * I[-1] * S[-1] / N - gamma * I[-1]
+            S.append(S[-1] + ds/precision)
+            I.append(I[-1] + di/precision)
+        return S[::precision], I[::precision]
 
 
 def main():
