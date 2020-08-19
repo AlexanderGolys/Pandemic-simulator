@@ -1,8 +1,12 @@
-import turtle as tt
 import random
 from enum import Enum, auto
 import time
 import copy
+
+import numpy as np
+import turtle as tt
+
+from main import Data
 
 
 def positive_int_check(constant, name):
@@ -57,13 +61,13 @@ class GlobalSetup:
     BALL_RADIUS = 5
     positive_int_check(BALL_RADIUS, "Radius")
 
-    FPS = 3
+    FPS = 30
     positive_int_check(FPS, "FPS")
 
     NO_BALLS = 500
     positive_int_check(NO_BALLS, "Number of particles")
 
-    RECOVERY_PROB = .07
+    RECOVERY_PROB = .1
 
     WINDOW_RESOLUTION = (1200, 800)
     positive_int_check(WINDOW_RESOLUTION[0], "Window width")
@@ -71,15 +75,6 @@ class GlobalSetup:
 
     ITERATIONS = 10000
     positive_int_check(ITERATIONS, "Maximal number of iterations")
-
-
-class States(Enum):
-    """
-    Enum class gathering possible particle states.
-    """
-    HEALTHY = auto()
-    INFECTED = auto()
-    RECOVERED = auto()
 
 
 class Colors:
@@ -405,73 +400,13 @@ class Graphics:
                        Graphics.shifted((w // 2, h * 2 // 5 - 8 * shift)))
         Graphics.write(f"{len(Data.data)} iterations", Graphics.shifted((w//2, h*2//5 - 9*shift)))
         beta, gamma, r0 = Data.SIR_analyse()
-        Graphics.write(f"{beta: .4f}", Graphics.shifted((w//2, h*2//5 - 10*shift)))
-        Graphics.write(f"{gamma: .4f}", Graphics.shifted((w//2, h*2//5 - 11*shift)))
-        Graphics.write(f"{r0: .4f}", Graphics.shifted((w//2, h*2//5 - 12*shift)))
+        beta2, gamma2, r02 = Data.SIR_analyse_improved()
+        Graphics.write(f"{beta: .2f} ({beta2: .2f})", Graphics.shifted((w//2, h*2//5 - 10*shift)))
+        Graphics.write(f"{gamma: .2f} ({gamma2: .2f})", Graphics.shifted((w//2, h*2//5 - 11*shift)))
+        Graphics.write(f"{r0: .2f} ({r02: .2f})", Graphics.shifted((w//2, h*2//5 - 12*shift)))
 
         tt.update()
         tt.exitonclick()
-
-
-class Iteration:
-    """
-    Basic data structure of gathered statistics.
-
-    Methods:
-        __init__(self, healthy, infected, recovered): Constructing Day object with number of healthy,
-            infected and recovered particles in given iteration.
-        __getitem__(self, item): Overridden [] operator.
-        infect(self): Adjusting stats to infection event.
-        recover(self): Adjusting stats to recovery event.
-    """
-    def __init__(self, healthy, infected, recovered):
-        self.healthy = healthy
-        self.infected = infected
-        self.recovered = recovered
-
-    def __getitem__(self, item):
-        if item == States.INFECTED:
-            return self.infected
-        if item == States.RECOVERED:
-            return self.recovered
-        if item == States.HEALTHY:
-            return self.healthy
-        raise KeyError("Key to Day cell must be a state.")
-
-    def infect(self):
-        self.healthy -= 1
-        self.infected += 1
-
-    def recover(self):
-        self.infected -= 1
-        self.recovered += 1
-
-
-class Data:
-    """
-    Class made just not to hold list with statistics and information about real-time performing.
-    """
-    data = [Iteration(GlobalSetup.NO_BALLS - 1, 1, 0)]
-    buffering_data = None
-
-    @staticmethod
-    def SIR_analyse():
-        N = GlobalSetup.NO_BALLS
-        S = [el[States.HEALTHY] for el in Data.data]
-        I = [el[States.INFECTED] for el in Data.data]
-        R = [el[States.RECOVERED] for el in Data.data]
-
-        dSdt = [n - c for c, n in zip(S[:-1], S[1:])]
-        dRdt = [n - c for c, n in zip(R[:-1], R[1:])]
-
-        beta_data = [-dSdt[i]*N/I[i]/S[i] for i in range(len(dSdt)) if S[i] > 0]
-        beta_estimator = sum(beta_data)/len(beta_data)
-
-        gamma_data = [dRdt[i]/I[i] for i in range(len(dRdt))]
-        gamma_estimator = sum(gamma_data)/len(gamma_data)
-
-        R0 = beta_estimator/gamma_estimator
-        return beta_estimator, gamma_estimator, R0
 
 
 def main():
@@ -479,28 +414,13 @@ def main():
     Main loop.
     """
     population = PopulationMethods.constructor()
-    if Data.buffering_data is None:
-        Graphics.init()
-        for i in range(GlobalSetup.ITERATIONS):
-            Data.data.append(copy.deepcopy(Data.data[-1]))
-            PopulationMethods.update_population(population)
-            Graphics.draw(population)
-            if Data.data[-1][States.INFECTED] == 0:
-                break
-
-    else:
-        print("Simulating pandemic...")
-        for i in range(GlobalSetup.ITERATIONS):
-            Data.data.append(copy.deepcopy(Data.data[-1]))
-            PopulationMethods.update_population(population)
-            Data.buffering_data.append([])
-            for ball in population:
-                Data.buffering_data[-1].append((ball.center, ball.color))
-            if Data.data[-1][States.INFECTED] == 0:
-                break
-        Graphics.init()
-        for states in Data.buffering_data:
-            Graphics.offline_draw(states)
+    Graphics.init()
+    for i in range(GlobalSetup.ITERATIONS):
+        Data.data.append(copy.deepcopy(Data.data[-1]))
+        PopulationMethods.update_population(population)
+        Graphics.draw(population)
+        if Data.data[-1][States.INFECTED] == 0:
+            break
 
     Graphics.draw_stats()
 

@@ -3,9 +3,11 @@ from enum import Enum, auto
 import time
 import warnings
 import copy
+import itertools
 
 import numpy as np
 import turtle as tt
+from matplotlib import pyplot as plt
 
 
 def positive_int_check(constant, name):
@@ -66,17 +68,17 @@ class GlobalSetup:
     FPS = 60
     positive_int_check(FPS, "FPS")
 
-    NO_BALLS = 100
+    NO_BALLS = 300
     positive_int_check(NO_BALLS, "Number of particles")
 
-    SOCIAL_DISTANCING = .2
+    SOCIAL_DISTANCING = 0
     if not 0 <= SOCIAL_DISTANCING <= 1:
         raise TypeError(f"Social distancing parameter must belong to <0, 1> instead of {SOCIAL_DISTANCING}.")
 
     RECOVERY_TIME = 300
     positive_int_check(RECOVERY_TIME, "Expected recovery time")
 
-    WINDOW_RESOLUTION = (1600, 900)
+    WINDOW_RESOLUTION = (900, 600)
     positive_int_check(WINDOW_RESOLUTION[0], "Window width")
     positive_int_check(WINDOW_RESOLUTION[1], "Window height")
 
@@ -89,6 +91,8 @@ class GlobalSetup:
     COLLISION_THRESHOLD = 1
     if not isinstance(COLLISION_THRESHOLD, int) or COLLISION_THRESHOLD < 0:
         raise TypeError(f"Collision threshold must be a non-negative integer instead of {COLLISION_THRESHOLD}.")
+
+    RECOVERY_RATE = .01
 
     RANDOM_RECOVERY_TIME = True
     if not isinstance(RANDOM_RECOVERY_TIME, bool):
@@ -233,7 +237,8 @@ class Ball:
         self.x = self.center[0]
         self.y = self.center[1]
         self.radius = GlobalSetup.BALL_RADIUS
-        self.moving = None
+        # self.moving = None
+        self.moving = True
         self.velocity = Vector(random.uniform(-1, 1), random.uniform(-1, 1))
         self.velocity.normalise()
         self.velocity.denormalise_to_speed()
@@ -363,7 +368,9 @@ class PopulationMethods:
                 ball.center = ball.velocity.shift(ball.center)
             if ball.state == States.INFECTED:
                 ball.infection_time += 1
-                if ball.infection_time > ball.recovery_time:
+                # if ball.infection_time > ball.recovery_time:
+                x = np.random.uniform()
+                if x < GlobalSetup.RECOVERY_RATE:
                     ball.state = States.RECOVERED
                     Data.data[-1].recover()
             if not ball.collision:
@@ -624,6 +631,10 @@ class Data:
     buffering_data = None
 
     @staticmethod
+    def reset():
+        Data.data = [Iteration(GlobalSetup.NO_BALLS - 1, 1, 0)]
+
+    @staticmethod
     def SIR_analyse():
         N = GlobalSetup.NO_BALLS
         S = [el[States.HEALTHY] for el in Data.data]
@@ -708,5 +719,43 @@ def main():
     tt.exitonclick()
 
 
+def no_gpx():
+    Data.reset()
+    population = PopulationMethods.constructor()
+    for i in itertools.count():
+        if i % 100 == 0:
+            print(f'iteration {i}')
+        Data.data.append(copy.deepcopy(Data.data[-1]))
+        PopulationMethods.update_population(population)
+        if Data.data[-1][States.INFECTED] == 0:
+            break
+
+
+def plot_basic_data():
+    plt.style.use('fivethirtyeight')
+    recovered = [el[States.RECOVERED] for el in Data.data]
+    infected = [el[States.INFECTED] for el in Data.data]
+    healthy = [el[States.HEALTHY] for el in Data.data]
+
+    labels = ['recovered', 'infected', 'healthy']
+    plt.stackplot(range(len(Data.data)), recovered, infected, healthy, labels=labels)
+    plt.legend(loc='lower right')
+    plt.show()
+
+
+def save_basic_data():
+    return {'healthy': [el[States.HEALTHY] for el in Data.data], 'recovered': [el[States.RECOVERED] for el in Data.data],
+            'infected': [el[States.INFECTED] for el in Data.data]}
+
+
+def plot_avg(iterations):
+    dt = []
+    for _ in range(iterations):
+        no_gpx()
+        dt.append(save_basic_data())
+        
+
 if __name__ == "__main__":
-    main()
+    no_gpx()
+    plot_basic_data()
+
